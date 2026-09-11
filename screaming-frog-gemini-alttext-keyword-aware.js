@@ -101,20 +101,23 @@ function readAsData(blob) {
     });
 }
 
-function convertImageToBase64(url) {
+// Single fetch for both the base64 payload and the mime type — fetching the
+// hero image twice (once for the bytes, once again just for the
+// Content-Type header) doubled the network latency for no reason, and was
+// enough on its own to blow past Screaming Frog's Custom JavaScript timeout
+// on slower image hosts. blob.type gives the mime type for free.
+function fetchImageAsBase64(url) {
     return fetch(url)
-        .then(response => response.blob())
-        .then(blob => readAsData(blob));
-}
-
-function getMimeType(url) {
-    return fetch(url)
-    .then(response => {
-        if (!response.ok) {
-            return response.text().then(text => { throw new Error(text) });
-        }
-        return response.headers.get('Content-Type');
-    });
+        .then(response => {
+            if (!response.ok) {
+                return response.text().then(text => { throw new Error(text) });
+            }
+            return response.blob();
+        })
+        .then(blob => readAsData(blob).then(dataUrl => ({
+            base64: dataUrl.split(",")[1],
+            mimeType: blob.type
+        })));
 }
 
 function findHeroImageUrl() {
@@ -128,12 +131,8 @@ const topic = getPageTopic();
 if (!heroImageUrl) {
     return seoSpider.error(new Error('No og:image found on this page.'));
 } else {
-    return Promise.all([convertImageToBase64(heroImageUrl), getMimeType(heroImageUrl)])
-        .then((result) => {
-            let base64ImgData = result[0].split(",")[1];
-            let mimeType = result[1];
-            return geminiRequest(base64ImgData, mimeType, topic);
-            })
+    return fetchImageAsBase64(heroImageUrl)
+        .then(({ base64, mimeType }) => geminiRequest(base64, mimeType, topic))
         .then(altText => seoSpider.data(altText))
         .catch(error => seoSpider.error(error));
 }
